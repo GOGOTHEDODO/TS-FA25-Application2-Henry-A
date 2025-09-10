@@ -28,6 +28,7 @@ Senario: Earthquake Early Warning System (EEWS)
 
 int AVG_WINDOW = 10;
 int SENSOR_THRESHOLD = 500;
+double GAMA = 0.7;
 
 // Consider supressing the output
 void systemActiveIndicatorTask(void *pvParameters)
@@ -85,7 +86,10 @@ void sensor_task(void *pvParameters)
     float Rmeasure = 0.;
     float lux = 0.;
     // Variables for moving average
-    int luxreadings[AVG_WINDOW] = {0};
+    int luxreadings[AVG_WINDOW];
+    for (int i = 0; i < AVG_WINDOW; ++i) {
+        luxreadings[i] = 0; // Initialize all readings to zero
+    }
     int idx = 0;
     float sum = 0;
 
@@ -99,14 +103,20 @@ void sensor_task(void *pvParameters)
     {
         raw = adc1_get_raw(LDR_ADC_CHANNEL);
         Vmeasure = ((float) raw / 4096.0) * 3.3; // TODO11b correct this with the equation seen earlier
-        Rmeasure = (2000.0 * Vmeasure)/(1 - ((float) Vmeasure/3.3)); // TODO11c correct this with the equation seen earlier
-        lux = 0;      // TODO11d correct this with the equation seen earlier
+        //book equation
+        //Rmeasure = (2000.0 * Vmeasure)/(1 - ((float) Vmeasure/3.3)); // TODO11c correct this with the equation seen earlier
+        //corrected equation from math
+        Rmeasure = (10000.0 * (Vmeasure/3.3))/(1 - Vmeasure/3.3);
+        //simplified equation not using due to me possibly being bad a math
+        //Rmeasure = 10000.0/(3.3/Vmeasure - 1);
+
+        lux = ( pow(50.0*100.0*pow(10.0,GAMA)/Rmeasure,(1.0/GAMA)) );      // TODO11d correct this with the equation seen earlier
         luxreadings[i] = lux;
         sum += luxreadings[i];
     }
 
     const TickType_t periodTicks = pdMS_TO_TICKS(500); // e.g. 500 ms period
-    TickType_t lastWakeTime = xTaskGetTickCount();     // initialize last wake time
+    lastWakeTime = xTaskGetTickCount();     // initialize last wake time
 
     while (1)
     {
@@ -115,9 +125,9 @@ void sensor_task(void *pvParameters)
         // printf("**raw **: Sensor %d\n", raw);
 
         // Compute LUX
-        Vmeasure = 0; // TODO11e correct this with the equation seen earlier
-        Rmeasure = 0; // TODO11f correct this with the equation seen earlier
-        lux = 0;      // TODO11g correct this with the equation seen earlier
+        Vmeasure = ((float)raw / 4096.0) * 3.3;
+        Rmeasure = (10000.0 * (Vmeasure / 3.3)) / (1 - Vmeasure / 3.3);
+        lux = (pow(50.0 * 100.0 * pow(10.0, GAMA) / Rmeasure, (1.0 / GAMA)));
 
         // Update moving average buffer
         sum -= luxreadings[idx]; // remove oldest value from sum
@@ -130,17 +140,17 @@ void sensor_task(void *pvParameters)
         // TODO11h Check threshold and print alert if exceeded or below based on context
         if (avg == SENSOR_THRESHOLD)
         {
-            printf("**Alert**: Sensor average %d exceeds threshold %d!\n", avg, SENSOR_THRESHOLD);
+            printf("**Alert**: Sensor average %d significant seismic activity detected!\n", avg);
         }
         else
         {
-            // TODO11i
-            //  (you could print the avg value for debugging)
+            printf("Sensor average %d, below threshold %d\n", avg, SENSOR_THRESHOLD);
         }
         // TODO11j: Print out time period [to help with answering Eng/Analysis quetionst (hint check Application Solution #1 )
+        printf("Sensor Time Peroid = %lu ms\n", (pdTICKS_TO_MS(xTaskGetTickCount()) - pdTICKS_TO_MS(lastWakeTime)));
         // https://wokwi.com/projects/430683087703949313
         // TODO11k Replace vTaskDelay with vTaskDelayUntil with parameters &lastWakeTime and periodTicks
-        vTaskDelay(periodTicks);
+        vTaskDelayUntil(&lastWakeTime, periodTicks);
     }
 }
 
@@ -151,7 +161,7 @@ void app_main()
     gpio_set_direction(LED_PIN, GPIO_MODE_OUTPUT);
     gpio_reset_pin(LDR_PIN); 
     gpio_set_direction(LDR_PIN, GPIO_MODE_INPUT);
-    acd1_config_width(ADC_WIDTH_BIT_12); 
+    adc1_config_width(ADC_WIDTH_BIT_12);
     adc1_config_channel_atten(LDR_ADC_CHANNEL, ADC_ATTEN_DB_11); 
     // Instantiate/ Create tasks:
     // . pointer to task function,
