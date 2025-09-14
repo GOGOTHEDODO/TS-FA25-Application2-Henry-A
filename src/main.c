@@ -59,25 +59,27 @@ void printSeismicReadings(void *pvParameters)
     int count = 0; 
     while (1)
     {
-        
         previousTime = currentTime;
         currentTime = pdTICKS_TO_MS(xTaskGetTickCount());
-
-        // Prints a periodic message based on a thematic area. Output a timestamp (ms) and period (ms)
-        printf("No noticable seismic activity @ time %lu [period = %lu]!\n", currentTime, currentTime - previousTime);
+        // Prints a periodic message based on a thematic area. Output a timestamp (ms) and period (ms
+        printf("Seismic monitor update: system stable. No major erros @ time %lu [period = %lu]!\n", currentTime, currentTime - previousTime);
         count++;
         vTaskDelay(pdMS_TO_TICKS(1000)); // Delay for 1000 ms
     }
     vTaskDelete(NULL); // We'll never get here; tasks run forever
 }
 
+long fib(long i)
+{
+    if (i <= 1)
+        return i;
+    //printf("FIBONACCI %ld \n", i);
+    return fib(i - 1) + fib(i - 2);
+}
+
 // TODO11: Create new task for sensor reading every 500ms
 void sensor_task(void *pvParameters)
 {
-    // TODO110 Configure ADC (12-bit width, 0-3.3V range with 11dB attenuation)
-    // adc1_config_width(ADC_WIDTH_BIT_12);
-    // adc1_config_channel_atten(LDR_ADC_CHANNEL, ADC_ATTEN_DB_11);
-
     TickType_t lastWakeTime = xTaskGetTickCount(); // Initialize last wake time
 
     // Variables to compute LUX
@@ -92,11 +94,6 @@ void sensor_task(void *pvParameters)
     }
     int idx = 0;
     float sum = 0;
-
-    // TODO11a consider where AVG_WINDOW is defined, it could be here, or global value
-    //    int AVG_WINDOW = 10;
-    //    int SENSOR_THRESHOLD = 500;
-
     // See TODO 99
     //  Pre-fill the readings array with an initial sample to avoid startup anomaly
     for (int i = 0; i < AVG_WINDOW; ++i)
@@ -110,14 +107,14 @@ void sensor_task(void *pvParameters)
         //simplified equation not using due to me possibly being bad a math
         //Rmeasure = 10000.0/(3.3/Vmeasure - 1);
 
-        lux = ( pow(50.0*100.0*pow(10.0,GAMA)/Rmeasure,(1.0/GAMA)) );      // TODO11d correct this with the equation seen earlier
+        lux = ( pow((50.0*1000.0*pow(10.0,GAMA))/Rmeasure, (1.0/GAMA)) );      // TODO11d correct this with the equation seen earlier
         luxreadings[i] = lux;
         sum += luxreadings[i];
     }
 
     const TickType_t periodTicks = pdMS_TO_TICKS(500); // e.g. 500 ms period
-    lastWakeTime = xTaskGetTickCount();     // initialize last wake time
-
+    //lastWakeTime = xTaskGetTickCount();     // initialize last wake time
+    TickType_t prevTime = 0;
     while (1)
     {
         // Read current sensor value
@@ -127,7 +124,8 @@ void sensor_task(void *pvParameters)
         // Compute LUX
         Vmeasure = ((float)raw / 4096.0) * 3.3;
         Rmeasure = (10000.0 * (Vmeasure / 3.3)) / (1 - Vmeasure / 3.3);
-        lux = (pow(50.0 * 100.0 * pow(10.0, GAMA) / Rmeasure, (1.0 / GAMA)));
+        // Rmeasure = (10000.0 * (Vmeasure / 3.3)) / (1 - Vmeasure / 3.3);
+        lux = (pow(50.0 * 1000.0 * pow(10.0, GAMA) / Rmeasure, (1.0 / GAMA)));
 
         // Update moving average buffer
         sum -= luxreadings[idx]; // remove oldest value from sum
@@ -138,7 +136,7 @@ void sensor_task(void *pvParameters)
         int avg = sum / AVG_WINDOW; // compute average
 
         // TODO11h Check threshold and print alert if exceeded or below based on context
-        if (avg == SENSOR_THRESHOLD)
+        if (avg >= SENSOR_THRESHOLD)
         {
             printf("**Alert**: Sensor average %d significant seismic activity detected!\n", avg);
         }
@@ -146,11 +144,19 @@ void sensor_task(void *pvParameters)
         {
             printf("Sensor average %d, below threshold %d\n", avg, SENSOR_THRESHOLD);
         }
+
         // TODO11j: Print out time period [to help with answering Eng/Analysis quetionst (hint check Application Solution #1 )
-        printf("Sensor Time Peroid = %lu ms\n", (pdTICKS_TO_MS(xTaskGetTickCount()) - pdTICKS_TO_MS(lastWakeTime)));
+        //printf("Sensor Time Peroid = %lu ms\n %lu, %lu", (pdTICKS_TO_MS(xTaskGetTickCount()) - pdTICKS_TO_MS(prevTime)), pdTICKS_TO_MS(prevTime), pdTICKS_TO_MS(lastWakeTime));
+
+        printf("Sensor Time Peroid = %lu ms\n", (pdTICKS_TO_MS(xTaskGetTickCount()) - pdTICKS_TO_MS(prevTime)));
+
+        prevTime = lastWakeTime;
         // https://wokwi.com/projects/430683087703949313
         // TODO11k Replace vTaskDelay with vTaskDelayUntil with parameters &lastWakeTime and periodTicks
-        vTaskDelayUntil(&lastWakeTime, periodTicks);
+        //THIS IS WHERE I CAUSE STARVATION UNCOMMENT TO SEE ONLY SENSOR WORK OR IF YOU WOULD LIKE TO KNOW THE FIRST 30 FIB NUMBERS
+        //I DON"T KNOW IF THAT WOULD EVER BE USEFULL, BUT HEY YOU DO YOU
+        //fib(30);
+        vTaskDelayUntil(&lastWakeTime, periodTicks); //this updates last wake time, which is why the period is off
     }
 }
 
@@ -178,11 +184,6 @@ void app_main()
                                                                           // but the pint task will give the same system running info, 
     xTaskCreatePinnedToCore(printSeismicReadings, "PrintTask", 2048, NULL, 2, NULL, 1); //print is second lowest as it provides important info, 
                                                                                      //but is not system critical
-    xTaskCreatePinnedToCore(sensor_task, "SensorTask", 2048, NULL, 3, NULL, 1); //the sensor task is the highest priority as it is critical to system operation
+    xTaskCreatePinnedToCore(sensor_task, "SensorTask", 8192, NULL, 3, NULL, 1); //the sensor task is the highest priority as it is critical to system operation
     // TODO12 Add in new Sensor task; make sure it has the correct priority to preempt
-    // the other two tasks.
-
-    // TODO13: Make sure the output is working as expected and move on to the engineering
-    // and analysis part of the application. You may need to make modifications for experiments.
-    // Make sure you can return back to the working version!
 }
